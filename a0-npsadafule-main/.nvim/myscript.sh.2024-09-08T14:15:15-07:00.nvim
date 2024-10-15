@@ -1,5 +1,0 @@
-#!/bin/bash
-#Demonstration script
-
-echo here are the files in your current directory:
-ls
