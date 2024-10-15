@@ -1,0 +1,4 @@
+/home/cmpt201/units/02-tools/a4-npsadafule/cmake/build/CMakeFiles/random.dir
+/home/cmpt201/units/02-tools/a4-npsadafule/cmake/build/CMakeFiles/add.dir
+/home/cmpt201/units/02-tools/a4-npsadafule/cmake/build/CMakeFiles/edit_cache.dir
+/home/cmpt201/units/02-tools/a4-npsadafule/cmake/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1 @@
+/usr/bin/clang CMakeFiles/add.dir/src/main.c.o CMakeFiles/add.dir/src/random_range.c.o -o add 
