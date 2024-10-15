@@ -1,0 +1,5 @@
+#!/bin/bash
+# A simple demonstration script
+
+echo Here are the files in your current directory:
+ls
