@@ -4,195 +4,328 @@
 #include <pthread.h>
 #include "interface.h"
 
-// Data structure for holding a single key-value pair
+// Constants for initial capacities
+#define I_CAPACITY 16
+
+// Structure for a key-value pair
 typedef struct {
     char *key;
     char *value;
-} KeyValuePair;
+} KVPair;
 
-// Data structure for holding multiple key-value pairs and metadata
+// Structure for dynamic arr of key-value pair
 typedef struct {
-    KeyValuePair *pairs;
-    int count;
-    int capacity;
-} KeyValueStore;
+    KVPair *pair;
+    size_t count;
+    size_t size;
+    pthread_mutex_t mutex;       // Mutex for synchronization
+    pthread_cond_t var;     // Condition variable for synchronization
+} KVArray;
 
-typedef struct {
-    KeyValueStore *store;
-    int start;
-    int end;
-    void (*map)(const struct mr_in_kv *);
-} MapThreadArgs;
-
-typedef struct {
-    KeyValueStore *store;
-    int start;
-    int end;
-    void (*reduce)(const struct mr_out_kv *);
-} ReduceThreadArgs;
-
-// Global storage for intermediate and final key-value pairs
-KeyValueStore intermediate_store;
-KeyValueStore final_store;
-
-pthread_mutex_t intermediate_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t final_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-// Initialize a key-value store
-void kv_store_init(KeyValueStore *store) {
-    store->capacity = 10;
-    store->count = 0;
-    store->pairs = malloc(store->capacity * sizeof(KeyValuePair));
-}
-
-// Add a key-value pair to a key-value store
-void kv_store_add(KeyValueStore *store, const char *key, const char *value) {
-    if (store->count >= store->capacity) {
-        store->capacity *= 2;
-        store->pairs = realloc(store->pairs, store->capacity * sizeof(KeyValuePair));
+// Function to initialize a KVArray
+void kv_arr_init(KVArray *arr) {
+    arr->size = I_CAPACITY;
+    arr->count = 0;
+    arr->pair = malloc(arr->size * sizeof(KVPair));
+    if (!arr->pair) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
     }
-    store->pairs[store->count].key = strdup(key);
-    store->pairs[store->count].value = strdup(value);
-    store->count++;
+    pthread_mutex_init(&arr->mutex, NULL);
+    pthread_cond_init(&arr->var, NULL);
 }
 
-// Sorting comparator function for key-value pairs
-int kv_pair_compare(const void *a, const void *b) {
-    return strcmp(((KeyValuePair *)a)->key, ((KeyValuePair *)b)->key);
+// Function to add a key-value pair to a KVArray
+void kv_arr_add(KVArray *arr, const char *key, const char *value) {
+    pthread_mutex_lock(&arr->mutex);
+
+    // Resize the arr if necessary
+    if (arr->count == arr->size) {
+        arr->size *= 2;
+        arr->pair = realloc(arr->pair, arr->size * sizeof(KVPair));
+        if (!arr->pair) {
+            perror("realloc failed");
+            pthread_mutex_unlock(&arr->mutex);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    // Duplicate the key and value
+    arr->pair[arr->count].key = strndup(key, MAX_KEY_SIZE - 1);
+    arr->pair[arr->count].value = strndup(value, MAX_VALUE_SIZE - 1);
+    if (!arr->pair[arr->count].key || !arr->pair[arr->count].value) {
+        perror("strndup failed");
+        pthread_mutex_unlock(&arr->mutex);
+        exit(EXIT_FAILURE);
+    }
+    arr->count++;
+
+    pthread_cond_signal(&arr->var); // Signal any waiting threads
+    pthread_mutex_unlock(&arr->mutex);
 }
 
-// Sort key-value store by key
-void kv_store_sort(KeyValueStore *store) {
-    qsort(store->pairs, store->count, sizeof(KeyValuePair), kv_pair_compare);
+// Function to free a KVArray
+void kv_arr_free(KVArray *arr) {
+    for (size_t i = 0; i < arr->count; i++) {
+        free(arr->pair[i].key);
+        free(arr->pair[i].value);
+    }
+    free(arr->pair);
+    pthread_mutex_destroy(&arr->mutex);
+    pthread_cond_destroy(&arr->var);
 }
+
+// Comparator function for qsort
+int kv_compare(const void *a, const void *b) {
+    const KVPair *kv1 = a;
+    const KVPair *kv2 = b;
+    return strcmp(kv1->key, kv2->key);
+}
+
+// Map thread arguments
+typedef struct {
+    const struct mr_input *input;
+    size_t start;
+    size_t end;
+    void (*map)(const struct mr_in_kv *);
+} MTArgs;
+
+// Reduce thread arguments
+typedef struct {
+    size_t start;
+    size_t end;
+    void (*reduce)(const struct mr_out_kv *);
+} RTArgs;
 
 // Map thread function
-void *map_thread(void *args) {
-    MapThreadArgs *mt_args = (MapThreadArgs *)args;
-    for (int i = mt_args->start; i < mt_args->end; i++) {
-        struct mr_in_kv kv;
-        strncpy(kv.key, mt_args->store->pairs[i].key, MAX_KEY_SIZE);
-        strncpy(kv.value, mt_args->store->pairs[i].value, MAX_VALUE_SIZE);
-        mt_args->map(&kv);
+void *map_thread(void *arg) {
+    MTArgs *args = arg;
+    for (size_t i = args->start; i < args->end; i++) {
+        args->map(&args->input->kv_lst[i]);
     }
     return NULL;
 }
+
+// Global arrs for intermediate and final key-value pair
+KVArray i_arr = {NULL, 0, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER};
+KVArray f_arr = {NULL, 0, 0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER};
 
 // Reduce thread function
-void *reduce_thread(void *args) {
-    ReduceThreadArgs *rt_args = (ReduceThreadArgs *)args;
-    for (int i = rt_args->start; i < rt_args->end; i++) {
-        struct mr_out_kv grouped_kv = {0};
-        strncpy(grouped_kv.key, rt_args->store->pairs[i].key, MAX_KEY_SIZE);
+void *reduce_thread(void *arg) {
+    RTArgs *args = arg;
+    size_t i = args->start;
 
-        int j = i;
-        while (j < rt_args->end && strcmp(rt_args->store->pairs[i].key, rt_args->store->pairs[j].key) == 0) {
-            strncpy(grouped_kv.value[grouped_kv.count++], rt_args->store->pairs[j].value, MAX_VALUE_SIZE);
+    while (i < args->end) {
+        pthread_mutex_lock(&i_arr.mutex);
+
+        // Wait if i_arr is empty
+        while (i_arr.count == 0) {
+            pthread_cond_wait(&i_arr.var, &i_arr.mutex);
+        }
+
+        // Group values for the same key
+        struct mr_out_kv out_kv;
+        strncpy(out_kv.key, i_arr.pair[i].key, MAX_KEY_SIZE - 1);
+        out_kv.key[MAX_KEY_SIZE - 1] = '\0';
+
+        size_t j = i + 1;
+        while (j < i_arr.count &&
+               strcmp(i_arr.pair[i].key, i_arr.pair[j].key) == 0) {
             j++;
         }
-        rt_args->reduce(&grouped_kv);
-        i = j - 1;
+
+        size_t num_val = j - i; ////////////////////////////
+        out_kv.count = num_val;
+        out_kv.value = malloc(num_val * sizeof(char[MAX_VALUE_SIZE]));
+        if (!out_kv.value) {
+            perror("malloc failed");
+            pthread_mutex_unlock(&i_arr.mutex);
+            exit(EXIT_FAILURE);
+        }
+
+        for (size_t k = 0; k < num_val; k++) {
+            strncpy(out_kv.value[k], i_arr.pair[i + k].value, MAX_VALUE_SIZE - 1);
+            out_kv.value[k][MAX_VALUE_SIZE - 1] = '\0';
+        }
+
+        pthread_mutex_unlock(&i_arr.mutex);
+
+        // Call the reduce function
+        args->reduce(&out_kv);
+
+        // Free allocated memory
+        free(out_kv.value);
+
+        i = j;
     }
     return NULL;
 }
 
-// Emit an intermediate key-value pair
+// Implementation of mr_emit_i
 int mr_emit_i(const char *key, const char *value) {
-    pthread_mutex_lock(&intermediate_mutex);
-    kv_store_add(&intermediate_store, key, value);
-    pthread_mutex_unlock(&intermediate_mutex);
+    kv_arr_add(&i_arr, key, value);
     return 0;
 }
 
-// Emit a final key-value pair
+// Implementation of mr_emit_f
 int mr_emit_f(const char *key, const char *value) {
-    pthread_mutex_lock(&final_mutex);
-    kv_store_add(&final_store, key, value);
-    pthread_mutex_unlock(&final_mutex);
+    kv_arr_add(&f_arr, key, value);
     return 0;
 }
 
-// Execute MapReduce framework
-int mr_exec(const struct mr_input *input, void (*map)(const struct mr_in_kv *),
-            size_t mapper_count, void (*reduce)(const struct mr_out_kv *),
-            size_t reducer_count, struct mr_output *output) {
-    
-    // Initialize intermediate and final stores
-    kv_store_init(&intermediate_store);
-    kv_store_init(&final_store);
+// Main MapReduce execution function
+int mr_exec(const struct mr_input *input,
+            void (*map)(const struct mr_in_kv *),
+            size_t mapper_count,
+            void (*reduce)(const struct mr_out_kv *),
+            size_t reducer_count,
+            struct mr_output *output) {
 
-    // Initialize input store
-    KeyValueStore input_store;
-    kv_store_init(&input_store);
-    for (size_t i = 0; i < input->count; i++) {
-        kv_store_add(&input_store, input->kv_lst[i].key, input->kv_lst[i].value);
+    // Initialize global arrs
+    kv_arr_init(&i_arr);
+    kv_arr_init(&f_arr);
+
+    // Create mapper threads
+    pthread_t *map_threads = malloc(mapper_count * sizeof(pthread_t));
+    MTArgs *map_args = malloc(mapper_count * sizeof(MTArgs));
+    if (!map_threads || !map_args) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
     }
 
-    // Create and start map threads
-    pthread_t map_threads[mapper_count];
-    size_t chunk_size = input->count / mapper_count;
-    MapThreadArgs map_args[mapper_count];
+    size_t records_per_map = input->count / mapper_count;
+    size_t extra = input->count % mapper_count;
+    size_t index = 0;
+
     for (size_t i = 0; i < mapper_count; i++) {
-        map_args[i].store = &input_store;
-        map_args[i].start = i * chunk_size;
-        map_args[i].end = (i == mapper_count - 1) ? input->count : (i + 1) * chunk_size;
+        size_t start = index;
+        size_t end; /////////////////////////////////////////////
+        if (i < extra) {
+            end = start + records_per_map + 1;
+        } else {
+            end = start + records_per_map;
+        }
+
+        map_args[i].input = input;
+        map_args[i].start = start;
+        map_args[i].end = end;
         map_args[i].map = map;
+
         pthread_create(&map_threads[i], NULL, map_thread, &map_args[i]);
+
+        index = end;
     }
 
-    // Wait for map threads to complete
+    // Wait for mapper threads to finish
     for (size_t i = 0; i < mapper_count; i++) {
         pthread_join(map_threads[i], NULL);
     }
+    free(map_threads);
+    free(map_args);
 
-    // Sort and group intermediate key-value pairs
-    kv_store_sort(&intermediate_store);
+    // Sort intermediate key-value pair
+    pthread_mutex_lock(&i_arr.mutex);
+    qsort(i_arr.pair, i_arr.count, sizeof(KVPair), kv_compare);
+    pthread_mutex_unlock(&i_arr.mutex);
 
-    // Create and start reduce threads
-    pthread_t reduce_threads[reducer_count];
-    chunk_size = intermediate_store.count / reducer_count;
-    ReduceThreadArgs reduce_args[reducer_count];
-    for (size_t i = 0; i < reducer_count; i++) {
-        reduce_args[i].store = &intermediate_store;
-        reduce_args[i].start = i * chunk_size;
-        reduce_args[i].end = (i == reducer_count - 1) ? intermediate_store.count : (i + 1) * chunk_size;
-        reduce_args[i].reduce = reduce;
-        pthread_create(&reduce_threads[i], NULL, reduce_thread, &reduce_args[i]);
+    // Create reducer threads
+    pthread_t *reduce_threads = malloc(reducer_count * sizeof(pthread_t));
+    RTArgs *reduce_args = malloc(reducer_count * sizeof(RTArgs));
+    if (!reduce_threads || !reduce_args) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
     }
 
-    // Wait for reduce threads to complete
+    // Calculate unique keys
+    size_t totalkeys = 0;
+    size_t i = 0;
+    while (i < i_arr.count) {
+        totalkeys++;
+        size_t j = i + 1;
+        while (j < i_arr.count &&
+               strcmp(i_arr.pair[i].key, i_arr.pair[j].key) == 0) {
+            j++;
+        }
+        i = j;
+    }
+
+    size_t keys_per_reducer = totalkeys / reducer_count;
+    size_t extra_keys = totalkeys % reducer_count;
+    i = 0;
+
+    for (size_t l = 0; l < reducer_count; l++) {
+        reduce_args[l].start = i;
+        size_t keys_assigned = 0;
+        size_t target_keys = keys_per_reducer + (l < extra_keys ? 1 : 0);
+
+        while (i < i_arr.count && keys_assigned < target_keys) {
+            size_t j = i + 1;
+            while (j < i_arr.count &&
+                   strcmp(i_arr.pair[i].key, i_arr.pair[j].key) == 0) {
+                j++;
+            }
+            i = j;
+            keys_assigned++;
+        }
+        reduce_args[l].end = i;
+        reduce_args[l].reduce = reduce;
+
+        pthread_create(&reduce_threads[l], NULL, reduce_thread
+    , &reduce_args[l]);
+    }
+
+    // Wait for reducer threads to finish
     for (size_t i = 0; i < reducer_count; i++) {
         pthread_join(reduce_threads[i], NULL);
     }
+    free(reduce_threads);
+    free(reduce_args);
 
-    // Transfer final store to output
-    kv_store_sort(&final_store);
-    output->kv_lst = malloc(final_store.count * sizeof(struct mr_out_kv));
-    output->count = final_store.count;
-    for (int i = 0; i < final_store.count; i++) {
-        strncpy(output->kv_lst[i].key, final_store.pairs[i].key, MAX_KEY_SIZE);
-        strncpy(output->kv_lst[i].value[0], final_store.pairs[i].value, MAX_VALUE_SIZE);
-        output->kv_lst[i].count = 1;
+    // Sort final key-value pair
+    pthread_mutex_lock(&f_arr.mutex);
+    qsort(f_arr.pair, f_arr.count, sizeof(KVPair), kv_compare);
+    pthread_mutex_unlock(&f_arr.mutex);
+
+    // Build output
+    output->kv_lst = malloc(f_arr.count * sizeof(struct mr_out_kv));
+    if (!output->kv_lst) {
+        perror("malloc failed");
+        exit(EXIT_FAILURE);
+    }
+    output->count = 0;
+    i = 0;
+
+    while (i < f_arr.count) {
+        struct mr_out_kv *out_kv = &output->kv_lst[output->count];
+        strncpy(out_kv->key, f_arr.pair[i].key, MAX_KEY_SIZE - 1);
+        out_kv->key[MAX_KEY_SIZE - 1] = '\0';
+
+        size_t j = i + 1;
+        while (j < f_arr.count &&
+               strcmp(f_arr.pair[i].key, f_arr.pair[j].key) == 0) {
+            j++;
+        }
+
+        size_t num_val = j - i;
+        out_kv->value = malloc(num_val * sizeof(char[MAX_VALUE_SIZE]));
+        if (!out_kv->value) {
+            perror("malloc failed");
+            exit(EXIT_FAILURE);
+        }
+        out_kv->count = num_val;
+
+        for (size_t k = 0; k < num_val; k++) {
+            strncpy(out_kv->value[k], f_arr.pair[i + k].value, MAX_VALUE_SIZE - 1);
+            out_kv->value[k][MAX_VALUE_SIZE - 1] = '\0';
+        }
+
+        output->count++;
+        i = j;
     }
 
-    // Clean up
-    for (int i = 0; i < input_store.count; i++) {
-        free(input_store.pairs[i].key);
-        free(input_store.pairs[i].value);
-    }
-    free(input_store.pairs);
-
-    for (int i = 0; i < intermediate_store.count; i++) {
-        free(intermediate_store.pairs[i].key);
-        free(intermediate_store.pairs[i].value);
-    }
-    free(intermediate_store.pairs);
-
-    for (int i = 0; i < final_store.count; i++) {
-        free(final_store.pairs[i].key);
-        free(final_store.pairs[i].value);
-    }
-    free(final_store.pairs);
+    // Free global arrs
+    kv_arr_free(&i_arr);
+    kv_arr_free(&f_arr);
 
     return 0;
 }
