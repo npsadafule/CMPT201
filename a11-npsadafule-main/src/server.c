@@ -1,9 +1,9 @@
-// server.c
 #include "server.h"
 #include "helper.h"
 #include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,160 +11,294 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define BUF_SIZE 1024
-#define MAX_EVENTS 10
+#define MAX_CLIENTS 100       // Given in instructions
+#define MAX_MESSAGE_SIZE 1024 // given in instructions
 
-int start_server(const char *port) {
-    int listen_sock;
-    struct sockaddr_in server_addr;
-    int opt = 1;
+typedef struct {
+  int sockfd;
+  struct sockaddr_in addr;
+} Client;
 
-    listen_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_sock == -1) {
-        perror("socket");
-        return -1;
+typedef struct Message {
+  uint8_t data[MAX_MESSAGE_SIZE];
+  size_t length;
+  struct Message *next;
+} Message;
+
+Client clients[MAX_CLIENTS];
+int client_count = 0;
+pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+int expected_clients = 0;
+int termination_count = 0;
+
+Message *message_queue_head = NULL;
+Message *message_queue_tail = NULL;
+pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
+
+void *broadcast_message(void *arg) {
+  while (1) {
+    pthread_mutex_lock(&queue_mutex);
+    while (message_queue_head == NULL) {
+      pthread_cond_wait(&queue_cond, &queue_mutex);
     }
 
-    // Set socket options to reuse address and port
-    if (setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("setsockopt");
-        close(listen_sock);
-        return -1;
+    Message *node = message_queue_head;
+    message_queue_head = node->next;
+    if (message_queue_head == NULL) {
+      message_queue_tail = NULL;
+    }
+    pthread_mutex_unlock(&queue_mutex);
+
+    // Broadcasting message to all clients
+    pthread_mutex_lock(&clients_mutex);
+    for (int i = 0; i < client_count; i++) {
+      if (send(clients[i].sockfd, node->data, node->length, 0) !=
+          (ssize_t)node->length) {
+        perror("Error broadcasting message");
+      }
+    }
+    pthread_mutex_unlock(&clients_mutex);
+
+    if (node->data[0] == MSG_TYPE_TERMINATE) {
+      // Clean up and exit
+      free(node);
+      break;
     }
 
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY; // Bind to all interfaces
-    server_addr.sin_port = htons(atoi(port));
+    free(node);
+  }
 
-    if (bind(listen_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        perror("bind");
-        close(listen_sock);
-        return -1;
-    }
-
-    if (listen(listen_sock, MAX_CLIENTS) == -1) {
-        perror("listen");
-        close(listen_sock);
-        return -1;
-    }
-
-    printf("Server is listening on port %s\n", port);
-
-    return listen_sock;
+  pthread_exit(NULL);
 }
 
-int handle_clients(int listen_sock) {
-    int epollfd;
-    struct epoll_event ev, events[MAX_EVENTS];
-    int nfds;
+void queue_message(uint8_t *message, size_t length) {
+  Message *node = malloc(sizeof(Message));
+  if (!node) {
+    perror("Memory allocation failed for Message");
+    exit(EXIT_FAILURE);
+  }
+  memcpy(node->data, message, length);
+  node->length = length;
+  node->next = NULL;
 
-    // Create epoll instance
-    epollfd = epoll_create1(0);
-    if (epollfd == -1) {
-        perror("epoll_create1");
-        return -1;
-    }
-
-    // Add the listening socket to epoll
-    ev.events = EPOLLIN;
-    ev.data.fd = listen_sock;
-    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, listen_sock, &ev) == -1) {
-        perror("epoll_ctl: listen_sock");
-        close(epollfd);
-        return -1;
-    }
-
-    // Buffer for incoming messages
-    char buf[BUF_SIZE];
-
-    while (1) {
-        nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1);
-        if (nfds == -1) {
-            perror("epoll_wait");
-            close(epollfd);
-            return -1;
-        }
-
-        for (int n = 0; n < nfds; ++n) {
-            if (events[n].data.fd == listen_sock) {
-                // Accept new connection
-                int conn_sock;
-                struct sockaddr_in client_addr;
-                socklen_t addrlen = sizeof(client_addr);
-                conn_sock = accept(listen_sock, (struct sockaddr *)&client_addr, &addrlen);
-                if (conn_sock == -1) {
-                    perror("accept");
-                    continue;
-                }
-
-                // Set non-blocking
-                int flags = fcntl(conn_sock, F_GETFL, 0);
-                if (flags == -1) flags = 0;
-                fcntl(conn_sock, F_SETFL, flags | O_NONBLOCK);
-
-                // Add new socket to epoll
-                ev.events = EPOLLIN | EPOLLET;
-                ev.data.fd = conn_sock;
-                if (epoll_ctl(epollfd, EPOLL_CTL_ADD, conn_sock, &ev) == -1) {
-                    perror("epoll_ctl: conn_sock");
-                    close(conn_sock);
-                    continue;
-                }
-
-                printf("Accepted connection from %s:%d\n",
-                       inet_ntoa(client_addr.sin_addr),
-                       ntohs(client_addr.sin_port));
-
-            } else {
-                // Handle client data
-                int client_fd = events[n].data.fd;
-                ssize_t count = read(client_fd, buf, sizeof(buf));
-                if (count == -1) {
-                    if (errno != EAGAIN) {
-                        perror("read");
-                        close(client_fd);
-                    }
-                } else if (count == 0) {
-                    // Connection closed
-                    printf("Client disconnected\n");
-                    close(client_fd);
-                } else {
-                    // Process data
-                    buf[count] = '\0';
-                    printf("Received: %s\n", buf);
-                    // Echo back to client
-                    write(client_fd, buf, count);
-                }
-            }
-        }
-    }
-
-    close(epollfd);
-    return 0;
+  pthread_mutex_lock(&queue_mutex);
+  if (message_queue_tail == NULL) {
+    message_queue_head = message_queue_tail = node;
+  } else {
+    message_queue_tail->next = node;
+    message_queue_tail = node;
+  }
+  pthread_cond_signal(&queue_cond);
+  pthread_mutex_unlock(&queue_mutex);
 }
 
-void cleanup_server(int listen_sock) {
-    close(listen_sock);
-    printf("Server shutdown\n");
+void *handle_client(void *arg) {
+  Client client = *(Client *)arg;
+  free(arg); // freeing memory allocted for client info
+  uint8_t buffer[MAX_MESSAGE_SIZE];
+  ssize_t bytes_received;
+
+  while (1) {
+    // read the message type
+    bytes_received = recv(client.sockfd, buffer, 1, MSG_WAITALL);
+    if (bytes_received <= 0) {
+      if (bytes_received == 0) {
+        printf("Client disconnected\n");
+      } else {
+        perror("Error receiving messsage type");
+      }
+      break;
+    }
+
+    uint8_t type = buffer[0];
+
+    if (type == MSG_TYPE_CHAT) {
+      // have to receive untill \n
+      size_t total_received = 0;
+      while (total_received < MAX_MESSAGE_SIZE - 1) {
+        bytes_received = recv(client.sockfd, buffer + 1 + total_received, 1, 0);
+        if (bytes_received <= 0) {
+          if (bytes_received == 0) {
+            printf("Client disconnected\n");
+          } else {
+            perror("error in receiving message");
+          }
+          goto disconnect;
+        }
+        total_received += bytes_received;
+        if (buffer[total_received] == '\n') {
+          break;
+        }
+      }
+
+      // preping the message to add to queue
+      uint8_t message[MAX_MESSAGE_SIZE];
+      size_t message_length = 0;
+
+      // message type
+      message[message_length++] = MSG_TYPE_CHAT;
+
+      // sender IP and port
+      uint32_t sender_ip = client.addr.sin_addr.s_addr;
+      uint16_t sender_port = client.addr.sin_port;
+      memcpy(message + message_length, &sender_ip, 4);
+      message_length += 4;
+      memcpy(message + message_length, &sender_port, 2);
+      message_length += 2;
+
+      // message
+      memcpy(message + message_length, buffer + 1, total_received);
+      message_length += total_received;
+
+      // adding message to queue
+      queue_message(message, message_length);
+    } else if (type == MSG_TYPE_TERMINATE) {
+      pthread_mutex_lock(&clients_mutex);
+      termination_count++;
+      if (termination_count == expected_clients) {
+        // all clients have sent termination message, queing termination
+        // message;
+        uint8_t terminate_message[2];
+        terminate_message[0] = MSG_TYPE_TERMINATE;
+        terminate_message[1] = '\n';
+        queue_message(terminate_message, 2);
+      }
+      pthread_mutex_unlock(&clients_mutex);
+      break;
+    } else {
+      fprintf(stderr, "Message type unknown from client: %u\n", type);
+      break;
+    }
+  }
+
+disconnect:
+  // removing client from thread
+  pthread_mutex_lock(&clients_mutex);
+  for (int i = 0; i < client_count; i++) {
+    if (clients[i].sockfd == client.sockfd) {
+      // close client socket
+      close(clients[i].sockfd);
+
+      // shifting the array to remove the client
+      for (int j = i; j < client_count - 1; j++) {
+        clients[j] = clients[j + 1];
+      }
+      client_count--;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&clients_mutex);
+  pthread_exit(NULL);
+}
+
+int start_server(const char *port_str, int expected_clients_param) {
+  expected_clients = expected_clients_param;
+
+  int listen_socket;
+  struct sockaddr_in server_address;
+
+  listen_socket = socket(AF_INET, SOCK_STREAM, 0);
+  if (listen_socket == -1) {
+    perror("Error in socket");
+    return -1;
+  }
+
+  int opt = 1;
+  if (setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    perror("error in setsockopt");
+    close(listen_socket);
+    return -1;
+  }
+
+  memset(&server_address, 0, sizeof(server_address));
+  server_address.sin_family = AF_INET;
+  server_address.sin_addr.s_addr = INADDR_ANY; // binding to all interface
+  server_address.sin_port = htons(atoi(port_str));
+
+  if (bind(listen_socket, (struct sockaddr *)&server_address,
+           sizeof(server_address)) == -1) {
+    perror("error in binding");
+    return -1;
+  }
+
+  if (listen(listen_socket, MAX_CLIENTS) == -1) {
+    perror("error in listening");
+    close(listen_socket);
+    return -1;
+  }
+
+  printf("Server listening on port %s\n", port_str);
+
+  // start the broadcasting thread
+  pthread_t broadcast_thread;
+  if (pthread_create(&broadcast_thread, NULL, broadcast_message, NULL) != 0) {
+    perror("error in creating broadcaster thread");
+    close(listen_socket);
+    return -1;
+  }
+
+  while (1) {
+    struct sockaddr_in client_address;
+    socklen_t client_len = sizeof(client_address);
+    int client_sockfd =
+        accept(listen_socket, (struct sockaddr *)&client_address, &client_len);
+    if (client_sockfd == -1) {
+      perror("error in accepting");
+      continue;
+    }
+
+    // adding client to list
+    pthread_mutex_lock(&clients_mutex);
+    clients[client_count].sockfd = client_sockfd;
+    clients[client_count].addr = client_address;
+    client_count++;
+    pthread_mutex_unlock(&clients_mutex);
+
+    // creating thread to handle client
+    pthread_t client_thread;
+    Client *client_info = malloc(sizeof(Client));
+    if (!client_info) {
+      perror("memory allocation failed for client info");
+      close(client_sockfd);
+      continue;
+    }
+    *client_info = clients[client_count - 1];
+
+    if (pthread_create(&client_thread, NULL, handle_client, client_info) != 0) {
+      perror("error in creating client thread");
+      close(client_sockfd);
+      free(client_info);
+      continue;
+    }
+
+    pthread_detach(client_thread);
+  }
+
+  // wating for brodcaster thread to finish
+  pthread_join(broadcast_thread, NULL);
+  return listen_socket;
+}
+
+void cleanup_server(int listen_socket) {
+  close(listen_socket);
+  printf("Server shut down");
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: ./server <port>\n");
-        exit(EXIT_FAILURE);
-    }
+  if (argc != 3) {
+    fprintf(stderr, "Format: ./server <port number> <# of clients>\n");
+    exit(EXIT_FAILURE);
+  }
 
-    int listen_sock = start_server(argv[1]);
-    if (listen_sock == -1) {
-        exit(EXIT_FAILURE);
-    }
+  const char *port = argv[1];
+  int clients_expected = atoi(argv[2]);
 
-    if (handle_clients(listen_sock) == -1) {
-        cleanup_server(listen_sock);
-        exit(EXIT_FAILURE);
-    }
+  int listen_socket = start_server(port, clients_expected);
+  if (listen_socket == -1) {
+    exit(EXIT_FAILURE);
+  }
 
-    cleanup_server(listen_sock);
-    return 0;
+  cleanup_server(listen_socket);
+  return 0;
 }
