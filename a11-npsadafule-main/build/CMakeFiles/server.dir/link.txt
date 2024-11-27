@@ -1,0 +1,1 @@
+/usr/bin/clang CMakeFiles/server.dir/src/server.c.o CMakeFiles/server.dir/src/helper.c.o -o server  -lpthread 

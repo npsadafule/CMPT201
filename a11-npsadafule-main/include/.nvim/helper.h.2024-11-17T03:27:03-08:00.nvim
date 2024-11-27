@@ -1,0 +1,28 @@
+#pragma once
+
+#include <netinet/in.h>
+#include <stdint.h>
+#include <sys/socket.h>
+
+// Convert buffer of bytes to a hex string representation
+// Return 0 on success and -1 on failure
+int convert(uint8_t *buff,     // input buffer containing bytes
+            ssize_t buff_size, // size of input buffer
+            char *str,         // output string buffer(hex represenatation)
+            ssize_t str_size   // Size of output string buffer
+);
+
+// Message types
+#define MSG_TYPE_CHAT 0
+#define MSG_TYPE_TERMINATE 1
+
+// Structure for messages
+struct message {
+  uint8_t type;    // Message type
+  uint16_t length; // length of message
+  char content[];  // flexible array member for message
+};
+
+// Function to send and receive messages
+ssize_t send_message(int sockfd, const struct message *msg);
+ssize_t receive_message(int sockfd, struct message *msg, size_t buff_size);

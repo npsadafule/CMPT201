@@ -1,0 +1,27 @@
+#pragma once
+
+#include<stddef.h>
+
+// Start the server
+// Bind to the port specified and listen for incoming connections
+// It returns the listening socket file descriptor on success and -1 on failure
+int start_server(const char *port, int expected_clients);
+
+// It cleans up and closes the listening socket
+void cleanup_server(int listen_socket);
+
+#define MAX_CLIENTS 100
+#define MAX_MESSAGE_SIZE 1024
+
+typedef struct {
+  int sockfd;
+  struct sockaddr_in addr;
+} Client;
+
+typedef struct Message {
+  uint8_t data[MAX_MESSAGE_SIZE];
+  size_t length;
+  struct Message *next;
+}Message;
+
+

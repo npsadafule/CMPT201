@@ -36,6 +36,11 @@ Message *message_queue_tail = NULL;
 pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t queue_cond = PTHREAD_COND_INITIALIZER;
 
+// for synchronization during termination
+int termination_message_sent = 0;
+pthread_mutex_t termination_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t termination_cond = PTHREAD_COND_INITIALIZER;
+
 void *broadcast_message(void *arg) {
   while (1) {
     pthread_mutex_lock(&queue_mutex);
@@ -61,6 +66,12 @@ void *broadcast_message(void *arg) {
     pthread_mutex_unlock(&clients_mutex);
 
     if (node->data[0] == MSG_TYPE_TERMINATE) {
+      // signal termination message sent
+      pthread_mutex_lock(&termination_mutex);
+      termination_message_sent = 1;
+      pthread_cond_broadcast(&termination_cond);
+      pthread_mutex_unlock(&termination_mutex);
+
       // Clean up and exit
       free(node);
       break;
@@ -98,17 +109,18 @@ void *handle_client(void *arg) {
   free(arg); // freeing memory allocted for client info
   uint8_t buffer[MAX_MESSAGE_SIZE];
   ssize_t bytes_received;
+  int client_sent_termination = 0; // flag to cleck if client sent termination
 
   while (1) {
     // read the message type
     bytes_received = recv(client.sockfd, buffer, 1, MSG_WAITALL);
     if (bytes_received <= 0) {
       if (bytes_received == 0) {
-        printf("Client disconnected\n");
+        // client disconnected
       } else {
-        perror("Error receiving messsage type");
+        perror("Error receiving message type");
       }
-      break;
+      goto disconnect;
     }
 
     uint8_t type = buffer[0];
@@ -116,7 +128,7 @@ void *handle_client(void *arg) {
     if (type == MSG_TYPE_CHAT) {
       // have to receive untill \n
       size_t total_received = 0;
-      while (total_received < MAX_MESSAGE_SIZE - 1) {
+      while (total_received < MAX_MESSAGE_SIZE - 2) {
         bytes_received = recv(client.sockfd, buffer + 1 + total_received, 1, 0);
         if (bytes_received <= 0) {
           if (bytes_received == 0) {
@@ -126,10 +138,11 @@ void *handle_client(void *arg) {
           }
           goto disconnect;
         }
-        total_received += bytes_received;
-        if (buffer[total_received] == '\n') {
+        if (buffer[1 + total_received] == '\n') {
+          total_received++;
           break;
         }
+        total_received += bytes_received;
       }
 
       // preping the message to add to queue
@@ -154,6 +167,7 @@ void *handle_client(void *arg) {
       // adding message to queue
       queue_message(message, message_length);
     } else if (type == MSG_TYPE_TERMINATE) {
+      client_sent_termination = 1; // client sent termination message
       pthread_mutex_lock(&clients_mutex);
       termination_count++;
       if (termination_count == expected_clients) {
@@ -165,16 +179,34 @@ void *handle_client(void *arg) {
         queue_message(terminate_message, 2);
       }
       pthread_mutex_unlock(&clients_mutex);
+
+      // wait for termination message
+      pthread_mutex_lock(&termination_mutex);
+      while (!termination_message_sent) {
+        pthread_cond_wait(&termination_cond, &termination_mutex);
+      }
+      pthread_mutex_unlock(&termination_mutex);
       break;
     } else {
       fprintf(stderr, "Message type unknown from client: %u\n", type);
-      break;
+      goto disconnect;
     }
   }
 
 disconnect:
-  // removing client from thread
   pthread_mutex_lock(&clients_mutex);
+  if (!client_sent_termination) {
+    // client disconnected unexpectedly
+    termination_count++;
+    if (termination_count == expected_clients) {
+      // all clients have terminated or disconnected
+      uint8_t terminate_message[2];
+      terminate_message[0] = MSG_TYPE_TERMINATE;
+      terminate_message[1] = '\n';
+      queue_message(terminate_message, 2);
+    }
+  }
+  // remove client from client array and close socket
   for (int i = 0; i < client_count; i++) {
     if (clients[i].sockfd == client.sockfd) {
       // close client socket
@@ -219,6 +251,7 @@ int start_server(const char *port_str, int expected_clients_param) {
   if (bind(listen_socket, (struct sockaddr *)&server_address,
            sizeof(server_address)) == -1) {
     perror("error in binding");
+    close(listen_socket);
     return -1;
   }
 

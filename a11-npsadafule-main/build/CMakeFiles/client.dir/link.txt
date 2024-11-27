@@ -1,0 +1,1 @@
+/usr/bin/clang CMakeFiles/client.dir/src/client.c.o CMakeFiles/client.dir/src/helper.c.o -o client  -lpthread 
