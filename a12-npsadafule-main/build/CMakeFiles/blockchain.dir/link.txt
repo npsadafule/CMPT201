@@ -1,0 +1,1 @@
+/usr/bin/clang CMakeFiles/blockchain.dir/src/main.c.o CMakeFiles/blockchain.dir/src/blockchain.c.o -o blockchain   -L/home/cmpt201/units/04-long-assignments/a12-npsadafule/lib  -Wl,-rpath,/home/cmpt201/units/04-long-assignments/a12-npsadafule/lib /usr/lib/aarch64-linux-gnu/libcrypto.so -lcheck-aarch64 -fsanitize=address 

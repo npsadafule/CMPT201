@@ -1,0 +1,12 @@
+{"version": 2, "width": 76, "height": 40, "timestamp": 1733027757, "idle_time_limit": 5.0, "env": {"SHELL": "/usr/bin/zsh", "TERM": "xterm-256color"}}
+[0.0762, "o", "\u001b[1m\u001b[7m%\u001b[27m\u001b[1m\u001b[0m                                                                           \r \r"]
+[0.076863, "o", "\u001b]2;cmpt201@950b22b27188:~/units/04-long-assignments/a12-npsadafule\u0007\u001b]1;..12-npsadafule\u0007"]
+[0.077531, "o", "\u001b]7;file://950b22b27188/home/cmpt201/units/04-long-assignments/a12-npsadafule\u001b\\"]
+[0.087343, "o", "\r\u001b[0m\u001b[27m\u001b[24m\u001b[J\u001b[35m[recording] \u001b[34m~/units/04-long-assignments/a12-npsadafule\u001b[32m❯\u001b[39m \u001b[K"]
+[0.087378, "o", "\u001b[?1h\u001b=\u001b[?2004h"]
+[1.150435, "i", "n"]
+[1.155392, "o", "n"]
+[1.159849, "o", "\b\u001b[1m\u001b[31mn\u001b[0m\u001b[39m"]
+[1.160108, "o", "\b\u001b[1m\u001b[31mn\u001b[0m\u001b[39m\u001b[92mvim CMakeLists.txt\u001b[39m\u001b[18D"]
+[1.293258, "i", "v"]
+[1.294724, "o", "\b\u001b[1m\u001b[31mn\u001b[1m\u001b[31mv\u001b[0m\u001b[39m"]
