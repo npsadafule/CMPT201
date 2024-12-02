@@ -21,6 +21,7 @@ static void hash_block_core(const struct block_core *core,
       EVP_DigestUpdate(ctx, core, sizeof(struct block_core)) != 1 ||
       EVP_DigestFinal_ex(ctx, hash, NULL) != 1) {
     fprintf(stderr, "sha256 compute fail\n");
+    EVP_MD_CTX_free(ctx);
     exit(EXIT_FAILURE);
   }
 
@@ -59,6 +60,9 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
   struct block *new_block = &bc->blocks[bc->count];
   struct block_core *core = &new_block->core;
 
+  //zero-initializing block_core to avoid uninitialzed padding bytes
+  memset(core, 0, sizeof(struct block_core));
+
   // set block_core fields
   core->index = bc->count;
 
@@ -76,18 +80,21 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
            SHA256_DIGEST_LENGTH);
   }
 
-  // initializing nonce
-  core->nonce = 0;
   unsigned char temp_hash[SHA256_DIGEST_LENGTH];
   int found = 0;
 
   // finding a nonce that makes the hash <= difficulty
-  while (core->nonce <= UINT32_MAX) {
+  while (1) {
     hash_block_core(core, temp_hash);
 
     if (hash_meets_difficulty(temp_hash, bc->difficulty)) {
       found = 1;
-      break; // valid hash found, no need to increment
+      break; // valid hash found
+    }
+
+    if (core->nonce == UINT32_MAX) {
+      //exhausted all possible values;
+      break;
     }
 
     core->nonce++;
@@ -104,7 +111,7 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
   // increment blockchain count
   bc->count++;
 
-  return (int)(bc->count - 1); // returning the index of the new block
+  return 0; // read the piazza posts  
 }
 
 // function to verify blockchain integrity
