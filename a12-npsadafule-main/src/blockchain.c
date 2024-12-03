@@ -1,10 +1,22 @@
 #include "blockchain.h"
 #include <openssl/evp.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+// Structure to pass args to threads
+struct thread_args {
+  const struct block_core *core_template; // Read-only template of block_core
+  struct block_core *core;                // pointer to the block_core to update
+  const unsigned char *difficulty;
+  uint32_t nonce_start;
+  uint32_t nonce_end;
+  int *found;
+  pthread_mutex_t *found_mutex;
+};
 
 // helper function to hash_block core
 static void hash_block_core(const struct block_core *core,
@@ -35,6 +47,38 @@ static int hash_meets_difficulty(const unsigned char *hash,
   return memcmp(hash, difficulty, SHA256_DIGEST_LENGTH) <= 0;
 }
 
+void *nonce_search_thread(void *arg) {
+  struct thread_args *args = (struct thread_args *)arg;
+  struct block_core local_core = *(args->core_template); // copying template
+  unsigned char temp_hash[SHA256_DIGEST_LENGTH];
+
+  for (uint32_t nonce = args->nonce_start; nonce <= args->nonce_end; nonce++) {
+    // cheching if vlaid nonce has been found already
+    pthread_mutex_lock(args->found_mutex);
+    if (*(args->found)) {
+      pthread_mutex_unlock(args->found_mutex);
+      break; // exiting if another thread finds a valid nonce
+    }
+    pthread_mutex_unlock(args->found_mutex);
+
+    local_core.nonce = nonce;
+    hash_block_core(&local_core, temp_hash);
+
+    if (hash_meets_difficulty(temp_hash, args->difficulty)) {
+      // valid nonce found, updating shared core and found flag
+      pthread_mutex_lock(args->found_mutex);
+      if (!*(args->found)) {
+        *(args->found) = 1;
+        *(args->core) = local_core; // updating shared core
+      }
+      pthread_mutex_unlock(args->found_mutex);
+      break;
+    }
+  }
+
+  return NULL;
+}
+
 // Function to initialize the blockchain
 int bc_init(struct blockchain *bc,
             unsigned char difficulty[SHA256_DIGEST_LENGTH]) {
@@ -60,7 +104,7 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
   struct block *new_block = &bc->blocks[bc->count];
   struct block_core *core = &new_block->core;
 
-  //zero-initializing block_core to avoid uninitialzed padding bytes
+  // zero-initializing block_core to avoid uninitialzed padding bytes
   memset(core, 0, sizeof(struct block_core));
 
   // set block_core fields
@@ -82,36 +126,70 @@ int bc_add_block(struct blockchain *bc, const unsigned char data[DATA_SIZE]) {
 
   unsigned char temp_hash[SHA256_DIGEST_LENGTH];
   int found = 0;
+  pthread_mutex_t found_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-  // finding a nonce that makes the hash <= difficulty
-  while (1) {
-    hash_block_core(core, temp_hash);
+  // number of threads (using 8 as this container has 8 cores)
+  int num_threads = 8;
 
-    if (hash_meets_difficulty(temp_hash, bc->difficulty)) {
-      found = 1;
-      break; // valid hash found
+  pthread_t threads[num_threads];
+  struct thread_args args[num_threads];
+
+  // calculating nonce range for every thread
+  uint32_t nonce_per_thread = UINT32_MAX / num_threads;
+  uint32_t nonce_start = 0;
+
+  // preparing a read only template of core
+  struct block_core core_template = *core;
+
+  // thread creation
+  for (int i = 0; i < num_threads; i++) {
+    args[i].core_template = &core_template;
+    args[i].core = core;
+    args[i].difficulty = bc->difficulty;
+    args[i].nonce_start = nonce_start;
+    if (i == num_threads - 1) {
+      args[i].nonce_end = UINT32_MAX;
+    } else {
+      args[i].nonce_end = nonce_start + nonce_per_thread - 1;
+    }
+    args[i].found = &found;
+    args[i].found_mutex = &found_mutex;
+
+    if (pthread_create(&threads[i], NULL, nonce_search_thread, &args[i]) != 0) {
+      perror("error in pthread_create");
+      // clean up previous created threads
+      for (int j = 0; j < i; j++) {
+        pthread_join(threads[j], NULL);
+      }
+      pthread_mutex_destroy(&found_mutex);
+      return -1;
     }
 
-    if (core->nonce == UINT32_MAX) {
-      //exhausted all possible values;
-      break;
-    }
-
-    core->nonce++;
+    nonce_start += nonce_per_thread;
   }
 
+  // waiting for threads to finish
+  for (int i = 0; i < num_threads; i++) {
+    pthread_join(threads[i], NULL);
+  }
+
+  pthread_mutex_destroy(&found_mutex);
+
   if (!found) {
-    // fail to find valid nonce with the nonce range
+    // failed to find valid nonce with the nonce_range
     return -1;
   }
 
-  // set the block's hash
+  // computing hash with found nonce
+  hash_block_core(core, temp_hash);
+
+  // set block's hash
   memcpy(new_block->hash, temp_hash, SHA256_DIGEST_LENGTH);
 
-  // increment blockchain count
+  // incrementing blockchain count
   bc->count++;
 
-  return 0; // read the piazza posts  
+  return 0; // read the piazza posts
 }
 
 // function to verify blockchain integrity

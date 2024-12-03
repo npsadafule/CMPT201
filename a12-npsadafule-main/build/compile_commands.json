@@ -1,14 +1,14 @@
 [
 {
-  "directory": "/home/cmpt201/units/04-long-assignments/a12-npsadafule/build",
-  "command": "/usr/bin/clang  -I/home/cmpt201/units/04-long-assignments/a12-npsadafule/include -std=gnu11 -o CMakeFiles/blockchain.dir/src/main.c.o -c /home/cmpt201/units/04-long-assignments/a12-npsadafule/src/main.c",
-  "file": "/home/cmpt201/units/04-long-assignments/a12-npsadafule/src/main.c",
+  "directory": "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/build",
+  "command": "/Library/Developer/CommandLineTools/usr/bin/cc  -I\"/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/include\" -I/opt/homebrew/include -std=gnu11 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk -o CMakeFiles/blockchain.dir/src/main.c.o -c \"/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/main.c\"",
+  "file": "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/main.c",
   "output": "CMakeFiles/blockchain.dir/src/main.c.o"
 },
 {
-  "directory": "/home/cmpt201/units/04-long-assignments/a12-npsadafule/build",
-  "command": "/usr/bin/clang  -I/home/cmpt201/units/04-long-assignments/a12-npsadafule/include -std=gnu11 -o CMakeFiles/blockchain.dir/src/blockchain.c.o -c /home/cmpt201/units/04-long-assignments/a12-npsadafule/src/blockchain.c",
-  "file": "/home/cmpt201/units/04-long-assignments/a12-npsadafule/src/blockchain.c",
+  "directory": "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/build",
+  "command": "/Library/Developer/CommandLineTools/usr/bin/cc  -I\"/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/include\" -I/opt/homebrew/include -std=gnu11 -arch arm64 -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX14.4.sdk -o CMakeFiles/blockchain.dir/src/blockchain.c.o -c \"/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/blockchain.c\"",
+  "file": "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/blockchain.c",
   "output": "CMakeFiles/blockchain.dir/src/blockchain.c.o"
 }
 ]

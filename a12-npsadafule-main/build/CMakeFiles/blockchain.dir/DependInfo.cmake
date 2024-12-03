@@ -8,8 +8,8 @@ set(CMAKE_DEPENDS_LANGUAGES
 
 # The set of dependency files which are needed:
 set(CMAKE_DEPENDS_DEPENDENCY_FILES
-  "/home/cmpt201/units/04-long-assignments/a12-npsadafule/src/blockchain.c" "CMakeFiles/blockchain.dir/src/blockchain.c.o" "gcc" "CMakeFiles/blockchain.dir/src/blockchain.c.o.d"
-  "/home/cmpt201/units/04-long-assignments/a12-npsadafule/src/main.c" "CMakeFiles/blockchain.dir/src/main.c.o" "gcc" "CMakeFiles/blockchain.dir/src/main.c.o.d"
+  "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/blockchain.c" "CMakeFiles/blockchain.dir/src/blockchain.c.o" "gcc" "CMakeFiles/blockchain.dir/src/blockchain.c.o.d"
+  "/Users/neelsadafule/Desktop/CMPT 201/CMPT201/a12-npsadafule-main/src/main.c" "CMakeFiles/blockchain.dir/src/main.c.o" "gcc" "CMakeFiles/blockchain.dir/src/main.c.o.d"
   )
 
 # Targets to which this target links which contain Fortran sources.
