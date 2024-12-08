@@ -1,0 +1,5 @@
+CC = clang
+CFLAGS = -Wall -g
+
+logging: logging.c
+	$(CC) $(CFLAGS) -o logging logging.c

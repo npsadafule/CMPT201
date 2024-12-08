@@ -1,0 +1,8 @@
+blah: blah.o
+	clang blah.o -o blah
+
+blah.o: blah.c
+	clang -c blah.c -o blah.o
+
+blah.c:
+	echo "int main() { return 0; }" > blah.c

@@ -1,0 +1,2 @@
+blah:
+	clang blah.c -o blah

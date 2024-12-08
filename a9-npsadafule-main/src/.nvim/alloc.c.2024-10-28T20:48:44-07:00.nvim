@@ -1,0 +1,33 @@
+#include "alloc.h"
+#include <unistd.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+#define HEADER_SIZE (sizeof(struct header))
+
+static struct header *free_list = NULL;
+static enum algs current_alg = FIRST_FIT;
+static int heap_limit = 0;
+static void *heap_start = NULL;
+static int current_heap_size = 0;
+
+//Helper function to reset allocator state
+void reset_allocator() {
+  free_list = NULL;
+  current_heap_size = 0;
+  heap_start = sbrk(0);
+}
+
+//Function to coalesce contiguous free blocks
+void coalesce_free_blocks() {
+  struct header *curr = free_list;
+  while (curr && curr->next) {
+    if ((void *)((char *)curr + HEADER_SIZE + curr->size) == curr->next) {
+      curr->size += HEADER_SIZE + curr->next->size;
+      curr->next = curr->next->next;
+    } else {
+      curr = curr->next;
+    }
+  }
+}
+

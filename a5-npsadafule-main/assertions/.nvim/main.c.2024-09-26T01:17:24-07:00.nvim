@@ -1,0 +1,8 @@
+#include "abs.h"
+#include <stdio.h>
+
+int main() {
+  int32_t test_value = INT32_MIN;
+  printf("Absolute value: %d\n", absolute_value(test_value));
+  return 0;
+}

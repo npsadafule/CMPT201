@@ -8,10 +8,12 @@
  * This is the header for each allocated memory used internally by the
  * allocator. The test cases use this too to get the size of the header.
  */
+#pragma pack(push, 1)
 struct header {
   uint64_t size;
   struct header *next;
 };
+#pragma pack(pop)
 
 /*
  * Allocation algorithm options

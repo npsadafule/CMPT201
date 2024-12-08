@@ -1,0 +1,5 @@
+CC = clang
+CFLAGS = -Wall -g
+
+factorial: factorial.c
+	$(CC) $(CFLAGS) -o factorial factorial.c
